@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened runtime permissions for SousBar.app (required for notarization).
+  Without them, a notarized build silently loses these features:
+    audio-input     push-to-talk voice prompts, spoken deny reasons and "Other" answers
+    apple-events    typing into iTerm2 / Terminal, Jump, and New session (AppleScript)
+  Speech recognition needs no entitlement outside the App Sandbox (Info.plist explains its use).
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+</dict>
+</plist>
