@@ -1,0 +1,30 @@
+name: CI
+
+# Manual only (Actions › CI › Run workflow): tests and a universal build, e.g. before a
+# release. It doesn't run on pushes or pull requests.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: macos-15 # pinned; macos-14 was retired on 2026-11-02
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: Test
+        run: swift test
+
+      - name: Build universal release
+        run: swift build -c release --arch arm64 --arch x86_64

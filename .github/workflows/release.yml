@@ -1,0 +1,189 @@
+name: Release
+
+# Run by hand: Actions › Release › Run workflow, then enter a version (e.g. 0.2.0).
+# Tests, builds a universal app, and publishes a GitHub Release tagged v<version> with
+# SousBar-<version>.dmg (drag-and-drop install), SousBar-<version>.zip (scripted install) and
+# their SHA-256 checksums. GitHub adds the source code archives itself.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without the v, e.g. 0.2.0 or 0.3.0-beta.1"
+        required: true
+        type: string
+      draft:
+        description: "Create as a draft (publish it yourself after checking)"
+        type: boolean
+        default: true
+      prerelease:
+        description: "Mark as a pre-release"
+        type: boolean
+        default: false
+      require_notarization:
+        description: "Fail instead of releasing an ad-hoc build when signing secrets are missing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # create the tag and the release
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: macos-15 # pinned; macos-14 was retired on 2026-11-02
+    timeout-minutes: 60 # notarization can take a while
+    env:
+      # Inputs go through env, never straight into shell commands.
+      VERSION: ${{ inputs.version }}
+      DRAFT: ${{ inputs.draft }}
+      PRERELEASE: ${{ inputs.prerelease }}
+      REQUIRE_NOTARIZATION: ${{ inputs.require_notarization }}
+      # Signing is on when all five secrets exist (see README › Signing and notarization).
+      CAN_NOTARIZE: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' && secrets.MACOS_CERTIFICATE_PASSWORD != '' && secrets.NOTARY_API_KEY_P8_BASE64 != '' && secrets.NOTARY_API_KEY_ID != '' && secrets.NOTARY_API_ISSUER_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags, for the duplicate check and release notes
+
+      - name: Check version
+        run: |
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Version must look like 1.2.3 or 1.2.3-beta.1 (got: $VERSION)"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::Tag v$VERSION already exists. Pick a new version."
+            exit 1
+          fi
+          echo "Releasing v$VERSION from ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}"
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: Check signing secrets
+        run: |
+          if [ "$CAN_NOTARIZE" = "true" ]; then
+            echo "Signing secrets found: this release will be Developer ID signed and notarized."
+          elif [ "$REQUIRE_NOTARIZATION" = "true" ]; then
+            echo "::error::Notarization was required, but the signing secrets aren't all set (see README › Signing and notarization)."
+            exit 1
+          else
+            echo "::warning::No signing secrets: this release is ad-hoc signed, and macOS will block the DMG app until users click Open Anyway."
+          fi
+
+      - name: Import the Developer ID certificate
+        if: env.CAN_NOTARIZE == 'true'
+        env:
+          P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          P8_BASE64: ${{ secrets.NOTARY_API_KEY_P8_BASE64 }}
+        run: |
+          # A throwaway keychain just for this run (deleted in the last step, even on failure).
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::The certificate secret has no \"Developer ID Application\" identity."
+            exit 1
+          fi
+          echo "Signing as: $IDENTITY"
+
+          echo "$P8_BASE64" | base64 --decode > "$RUNNER_TEMP/notary_key.p8"
+          {
+            echo "SIGN_IDENTITY=$IDENTITY"
+            echo "NOTARY_KEY=$RUNNER_TEMP/notary_key.p8"
+            echo "SIGNING_KEYCHAIN=$KEYCHAIN"
+          } >> "$GITHUB_ENV"
+
+      - name: Test
+        run: swift test
+
+      - name: Package
+        env:
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_API_ISSUER_ID }}
+        run: scripts/package.sh "$VERSION" "$GITHUB_RUN_NUMBER"
+
+      - name: Keep the build as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SousBar-${{ inputs.version }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.sha256
+          retention-days: 30
+
+      - name: Write release notes
+        run: |
+          if [ "$CAN_NOTARIZE" = "true" ]; then
+            cat > notes.md <<EOF
+          ## Install
+
+          1. Download \`SousBar-$VERSION.dmg\`, open it, and drag **SousBar** to **Applications**.
+          2. Open SousBar and click **Connect** when it asks to connect to Claude Code, then restart running Claude Code sessions.
+          3. Turn on **System Settings › Keyboard › Touch Bar Settings › Show Control Strip**.
+
+          Signed with a Developer ID and notarized by Apple. Universal build (Apple silicon and Intel), macOS 12 or later, MacBook Pro with a Touch Bar.
+          Prefer a script? Download \`SousBar-$VERSION.zip\`, unzip, then \`cd SousBar-$VERSION && ./install.sh\`.
+          EOF
+          else
+            cat > notes.md <<EOF
+          ## Install
+
+          **Disk image (most people):**
+          1. Download \`SousBar-$VERSION.dmg\`, open it, and drag **SousBar** to **Applications**.
+          2. Open SousBar from Applications. It isn't notarized, so macOS blocks the first launch:
+             go to **System Settings › Privacy & Security**, click **Open Anyway** (on macOS 14 and
+             earlier you can also right-click the app › Open).
+          3. Click **Connect** when SousBar asks to connect to Claude Code, then restart running Claude Code sessions.
+
+          **Script:** download \`SousBar-$VERSION.zip\`, unzip, then \`cd SousBar-$VERSION && ./install.sh\`
+          (no Gatekeeper prompt: the script clears the download quarantine).
+
+          Then turn on **System Settings › Keyboard › Touch Bar Settings › Show Control Strip**.
+          Universal build (Apple silicon and Intel), macOS 12 or later, MacBook Pro with a Touch Bar.
+          EOF
+          fi
+          {
+            echo
+            echo "Checksums:"
+            echo "\`$(cat "dist/SousBar-$VERSION.dmg.sha256")\`"
+            echo "\`$(cat "dist/SousBar-$VERSION.zip.sha256")\`"
+            echo
+          } >> notes.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          [ "$DRAFT" = "true" ] && flags+=(--draft)
+          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+          gh release create "v$VERSION" \
+            "dist/SousBar-$VERSION.dmg" "dist/SousBar-$VERSION.dmg.sha256" \
+            "dist/SousBar-$VERSION.zip" "dist/SousBar-$VERSION.zip.sha256" \
+            --target "$GITHUB_SHA" \
+            --title "SousBar $VERSION" \
+            --notes-file notes.md \
+            --generate-notes \
+            "${flags[@]}"
+
+      - name: Remove the signing keychain and key
+        if: always()
+        run: |
+          [ -n "${SIGNING_KEYCHAIN:-}" ] && security delete-keychain "$SIGNING_KEYCHAIN" || true
+          rm -f "$RUNNER_TEMP/notary_key.p8" "$RUNNER_TEMP/cert.p12"
