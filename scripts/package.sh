@@ -66,6 +66,19 @@ for f in "$STAGE/SousBar.app/Contents/MacOS/SousBar" "$STAGE/SousBar.app/Content
 done
 codesign --verify --deep --strict "$STAGE/SousBar.app"
 
+# Stapling fetches the ticket from Apple; a dropped connection there ("The network connection
+# was lost", stapler error 68) is common on CI runners and says nothing about the build.
+retry() {
+  local n
+  for n in 1 2 3 4; do
+    "$@" && return 0
+    [ "$n" = 4 ] && break
+    echo "  '$*' failed (attempt $n of 4), retrying in $((n * 15)) s…"
+    sleep $((n * 15))
+  done
+  echo "'$*' failed 4 times"; return 1
+}
+
 make_zip() { rm -f "dist/$NAME.zip"; (cd dist && ditto -c -k --keepParent "$NAME" "$NAME.zip"); }
 
 echo "▸ Zipping"
@@ -73,7 +86,7 @@ make_zip
 if [ "$NOTARIZE" = 1 ]; then
   echo "▸ Notarizing the app and hook"
   notarize "dist/$NAME.zip"
-  xcrun stapler staple "$STAGE/SousBar.app" # so it opens even offline
+  retry xcrun stapler staple "$STAGE/SousBar.app" # so it opens even offline
   spctl --assess --type execute -vv "$STAGE/SousBar.app" 2>&1 | grep -q "Notarized Developer ID" \
     || { echo "Gatekeeper doesn't accept the stapled app"; spctl --assess --type execute -vv "$STAGE/SousBar.app"; exit 1; }
   make_zip # again, now with the stapled app inside
@@ -94,8 +107,8 @@ if [ "$NOTARIZE" = 1 ]; then
   echo "▸ Notarizing the disk image"
   codesign --force --sign "$SIGN_IDENTITY" --timestamp "dist/$NAME.dmg"
   notarize "dist/$NAME.dmg"
-  xcrun stapler staple "dist/$NAME.dmg"
-  xcrun stapler validate "dist/$NAME.dmg"
+  retry xcrun stapler staple "dist/$NAME.dmg"
+  retry xcrun stapler validate "dist/$NAME.dmg"
 fi
 (cd dist && shasum -a 256 "$NAME.dmg" > "$NAME.dmg.sha256")
 

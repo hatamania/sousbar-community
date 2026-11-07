@@ -16,7 +16,7 @@ Free to use. If SousBar saves you a trip to the terminal, you can [buy me a coff
 
 ## Install
 
-**Disk image** (most people): download `SousBar-<version>.dmg` from [Releases](https://github.com/hatamania/sousbar/releases), open it, and drag SousBar to Applications. Open it; because it isn't notarized, macOS blocks the first launch, so go to **System Settings › Privacy & Security** and click **Open Anyway**. A short **setup window** walks you through it: **Connect to Claude Code** (adds its hooks to `~/.claude/settings.json`, after a backup), turn on the Control Strip, allow the microphone for voice (optional), launch at login, and send a test approval to the Touch Bar. Restart running Claude Code sessions afterwards. Reopen it any time from **Setup Guide…** in the menu bar.
+**Disk image** (most people): download `SousBar-<version>.dmg` from [Releases](https://github.com/hatamania/sousbar-community/releases), open it, and drag SousBar to Applications, then open it. Releases are signed and notarized by Apple, so it opens like any other Mac app. A short **setup window** walks you through it: **Connect to Claude Code** (adds its hooks to `~/.claude/settings.json`, after a backup), turn on the Control Strip, allow the microphone for voice (optional), launch at login, and send a test approval to the Touch Bar. Restart running Claude Code sessions afterwards. Reopen it any time from **Setup Guide…** in the menu bar.
 
 **Script, from a release** (no Xcode needed): download `SousBar-<version>.zip`, unzip it, then:
 
@@ -32,7 +32,7 @@ cd sousbar
 ./install.sh
 ```
 
-Either way: macOS 12 or later on a MacBook Pro with a Touch Bar. Releases are universal (Apple silicon and Intel), ad-hoc signed and not notarized; `install.sh` clears the download quarantine so macOS lets the app run.
+Either way: macOS 12 or later on a MacBook Pro with a Touch Bar. Releases are universal (Apple silicon and Intel), signed with Developer ID and notarized. Building from source gives you an ad-hoc signed app; `install.sh` clears the download quarantine so macOS lets it run.
 
 The installer:
 - builds and installs `~/Applications/SousBar.app` (chef-hat icon, drawn at install time), a menu-bar app with no Dock icon
@@ -205,7 +205,7 @@ SousBar is a side project, free for everyone. If it's useful to you:
 
 - ☕ [Buy me a coffee](https://buymeacoffee.com/hataphan). It keeps the project going.
 - ⭐ Star the repo so more Touch Bar owners find it.
-- 🐞 [Open an issue](https://github.com/hatamania/sousbar/issues) for bugs and ideas. Pull requests are welcome too.
+- 🐞 [Open an issue](https://github.com/hatamania/sousbar-community/issues) for bugs and ideas. Pull requests are welcome too.
 
 ## License
 
