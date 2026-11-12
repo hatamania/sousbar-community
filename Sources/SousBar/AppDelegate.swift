@@ -15,6 +15,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            lastFrontApp = front
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(frontAppChanged(_:)),
+            name: NSWorkspace.didActivateApplicationNotification, object: nil)
+
         Settings.migrateFromLegacy()
         touchBar = TouchBarController(store: store)
         store.onChange = { [weak self] in
@@ -70,6 +78,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.store.adoptRunning(Proc.runningAgents())
         }
         RunLoop.main.add(prune, forMode: .common)
+    }
+
+    // MARK: - URL scheme
+
+    /// The app that was in front before us, so a `sousbar://` link can hand focus back.
+    private var lastFrontApp: NSRunningApplication?
+
+    @objc private func frontAppChanged(_ note: Notification) {
+        guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+        lastFrontApp = app
+    }
+
+    /// For a button in MTMR, Pock, BetterTouchTool, Shortcuts, a hotkey app or a script:
+    /// `sousbar://show` (launcher), `sousbar://claude`, `sousbar://open/<module>`,
+    /// `sousbar://hide`, `sousbar://toggle`.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls { handleURL(url) }
+        // Opening a URL activates us unless the caller used `open -g`. We have no windows to
+        // show, so give the keyboard back to the app you were using.
+        if NSApp.isActive, NSApp.keyWindow == nil {
+            lastFrontApp?.activate()
+        }
+    }
+
+    private func handleURL(_ url: URL) {
+        guard url.scheme?.lowercased() == "sousbar", let touchBar else { return }
+        // sousbar://show and sousbar:show both work.
+        let command = (url.host ?? url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))).lowercased()
+        switch command {
+        case "show", "":
+            touchBar.showLauncher()
+        case "claude":
+            touchBar.openClaude()
+        case "open":
+            let id = url.pathComponents.dropFirst().first ?? ""
+            if id.isEmpty { touchBar.showLauncher() } else if !touchBar.open(moduleId: id.lowercased()) {
+                NSLog("SousBar: no module \(id)")
+            }
+        case "hide", "close":
+            touchBar.minimize()
+        case "toggle":
+            if touchBar.isPresented { touchBar.minimize() } else { touchBar.showLauncher() }
+        default:
+            NSLog("SousBar: unknown URL \(url)")
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

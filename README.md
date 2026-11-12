@@ -151,6 +151,26 @@ If the expanded bar shows up empty, its content is wider than your Touch Bar. Ma
 defaults write local.sousbar.app barWidth -float 880 && pkill SousBar && open ~/Applications/SousBar.app
 ```
 
+## Launcher and modules
+
+Tapping the pill opens the **launcher**: one button per app, Claude first. Tap **Claude** for the session bar. The ⊞ button on its left brings you back to the launcher. When Claude needs an answer, the bar skips the launcher and shows the question.
+
+To add an app (an RSS feed, a build status…), write a class that conforms to `BarModule` (`Sources/SousBar/Modules.swift`) and add it to `touchBar.modules` in `AppDelegate`. It gets a launcher button and, when tapped, the whole bar between the back and hide buttons.
+
+## Opening it from another app
+
+If MTMR, Pock or BetterTouchTool takes over your whole Touch Bar, it covers the Control Strip pill. Give that app a button that opens SousBar instead:
+
+```bash
+open -g sousbar://toggle      # open the launcher, or close the bar if it's open
+open -g sousbar://show        # the launcher
+open -g sousbar://claude      # straight to Claude
+open -g sousbar://open/<id>   # straight to a module, e.g. sousbar://open/rss
+open -g sousbar://hide        # hand the Touch Bar back
+```
+
+`-g` keeps your current app in front. Without it SousBar hands focus back itself. In BetterTouchTool use **Open URL** or **Execute Terminal Command**; in MTMR use a `shellScript` button. These links also work from Shortcuts, Raycast, Alfred and hotkey apps.
+
 ## Troubleshooting
 
 - **No pill:** turn on Show Control Strip, then quit and reopen SousBar.

@@ -163,7 +163,7 @@ final class BarPreviewTests: XCTestCase {
 
     func testChipOpensAllActiveSessions() {
         bar.rebuild()
-        (bar.itemViews.first as? HoldButton)?.onComplete?() // tap the chip
+        (bar.itemViews[1] as? HoldButton)?.onComplete?() // tap the chip (after the launcher button)
         XCTAssertEqual(bar.mode, .active)
         let buttons = bar.itemViews.compactMap { $0 as? HoldButton }
         let subtitles = Set(buttons.compactMap(\.subtitle))
@@ -228,7 +228,7 @@ final class BarPreviewTests: XCTestCase {
     }
 
     func testHideIsAlwaysLast() {
-        for mode in [TouchBarController.Mode.normal, .active, .sessions, .model, .effort] {
+        for mode in [TouchBarController.Mode.normal, .active, .sessions, .model, .effort, .launcher] {
             bar.mode = mode
             bar.rebuild()
             let last = bar.itemViews.last as? HoldButton
@@ -249,7 +249,7 @@ final class BarPreviewTests: XCTestCase {
             XCTAssertTrue(bar.rightContainer.subviews.first?.subviews.contains { $0 === hide } ?? false, "\(label)")
         }
         check("home")
-        for (mode, label) in [(TouchBarController.Mode.active, "active"), (.sessions, "history"), (.model, "model"), (.effort, "effort")] {
+        for (mode, label) in [(TouchBarController.Mode.active, "active"), (.sessions, "history"), (.model, "model"), (.effort, "effort"), (.launcher, "launcher")] {
             bar.mode = mode
             check(label)
         }
@@ -269,7 +269,7 @@ final class BarPreviewTests: XCTestCase {
 
     func testChipHasFixedWidth() {
         render("chip")
-        let chip = bar.itemViews.first
+        let chip = bar.itemViews.dropFirst().first // after the launcher button
         XCTAssertEqual(chip?.frame.width ?? 0, TouchBarController.chipWidth, accuracy: 0.5)
     }
 }

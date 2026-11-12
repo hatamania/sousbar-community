@@ -28,7 +28,9 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     /// What the bar shows when no approval or dictation is in front.
     /// active = running sessions (the chip); sessions = this folder's history (the list button).
     /// reading = the current reply word by word.
-    enum Mode: Equatable { case normal, active, sessions, model, effort, reading }
+    /// launcher = the layer in front: one button per app (Claude, then `modules`).
+    /// module = one of `modules` has the bar.
+    enum Mode: Equatable { case normal, active, sessions, model, effort, reading, launcher, module(String) }
     var mode: Mode = .normal // internal so tests can render each screen
     private var sessionsPage = 0
     /// The folder whose history the session picker shows, and that history (loaded off the main thread).
@@ -39,6 +41,21 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private var expectingNewSession: (folder: String, since: Date)?
     /// Opens a terminal running `claude` in a folder. Swappable so tests never open real tabs.
     var openNewSession: (String, TerminalInfo?) -> String? = TerminalBridge.newSession(in:like:)
+    /// Show / hide the full-width bar. Swappable so tests never take over the real Touch Bar.
+    var systemPresent: (NSTouchBar, NSTouchBarItem.Identifier) -> Void = PrivateTouchBar.present(_:trayId:)
+    var systemMinimize: (NSTouchBar) -> Void = PrivateTouchBar.minimize(_:)
+
+    /// Apps on the launcher after Claude (RSS and so on). See `BarModule`.
+    var modules: [BarModule] = [] {
+        didSet {
+            for m in modules {
+                m.onChange = { [weak self, weak m] in
+                    guard let self, let m, self.isPresented else { return }
+                    if self.mode == .launcher || self.mode == .module(m.id) { self.rebuild() }
+                }
+            }
+        }
+    }
 
     private(set) var isPresented = false
     private var autoOpened = false
@@ -120,21 +137,49 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     // MARK: - Showing / hiding
 
     @objc private func pillTapped() {
-        present(auto: false)
-        if Settings.autoRead, store.pending.isEmpty, let s = currentSession, s.unread, canRead(s) { startReading() }
+        // Claude is waiting on you: skip the launcher.
+        if !store.pending.isEmpty { openClaude() } else { present(auto: false) }
     }
 
+    /// Opens the bar. `auto` = opened for an approval (goes straight to Claude, and closes again
+    /// once answered). Otherwise it opens on the launcher.
     func present(auto: Bool) {
         if !isPresented {
             autoOpened = auto
             isPresented = true
-            mode = .normal
+            mode = auto ? .normal : .launcher
             if !auto { currentSessionId = store.sessionsByRecency.first?.id }
             rebuild()
-            PrivateTouchBar.present(bar, trayId: Self.pillId)
+            systemPresent(bar, Self.pillId)
         } else {
             rebuild()
         }
+    }
+
+    /// Claude's bar (the session home), opening the bar first if needed.
+    func openClaude() {
+        if !isPresented { present(auto: false) }
+        mode = .normal
+        rebuild()
+        if Settings.autoRead, store.pending.isEmpty, let s = currentSession, s.unread, canRead(s) { startReading() }
+    }
+
+    /// Opens a module by id ("claude" is Claude). Returns false if there's no such module.
+    @discardableResult
+    func open(moduleId id: String) -> Bool {
+        if id == "claude" { openClaude(); return true }
+        guard modules.contains(where: { $0.id == id }) else { return false }
+        if !isPresented { present(auto: false) }
+        mode = .module(id)
+        rebuild()
+        return true
+    }
+
+    func showLauncher() {
+        if !isPresented { present(auto: false); return }
+        autoOpened = false // you're browsing now; don't close when the approval is answered
+        mode = .launcher
+        rebuild()
     }
 
     func minimize() {
@@ -143,7 +188,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         isPresented = false
         autoOpened = false
         mode = .normal
-        PrivateTouchBar.minimize(bar)
+        systemMinimize(bar)
         updatePill()
         reassertPill()
         // Some macOS versions only re-show the item after the close animation.
@@ -219,17 +264,16 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         return parts.joined(separator: "|")
     }
 
+    /// Orange = needs you, blue = working, green = new reply; nil = nothing going on.
+    private var claudeTint: NSColor? {
+        if !store.pending.isEmpty { return .systemOrange }
+        if store.sessions.values.contains(where: { $0.state.isWorking }) { return .systemBlue }
+        if store.sessions.values.contains(where: { $0.unread }) { return .systemGreen }
+        return nil
+    }
+
     private func updatePill() {
-        let color: NSColor
-        if !store.pending.isEmpty {
-            color = .systemOrange
-        } else if store.sessions.values.contains(where: { $0.state.isWorking }) {
-            color = .systemBlue
-        } else if store.sessions.values.contains(where: { $0.unread }) {
-            color = .systemGreen
-        } else {
-            color = NSColor(white: store.sessions.isEmpty ? 0.25 : 0.3, alpha: 1)
-        }
+        let color = claudeTint ?? NSColor(white: store.sessions.isEmpty ? 0.25 : 0.3, alpha: 1)
         // Just the chef hat; a number only when more than one request is waiting.
         pillButton.title = store.pending.count > 1 ? "\(store.pending.count)" : ""
         pillButton.imagePosition = pillButton.title.isEmpty ? .imageOnly : .imageLeading
@@ -506,7 +550,40 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         case .effort: return [back, caption("Effort"), Self.spacer()] + effortViews()
         case .reading: return readingViews()
         case .normal: return homeViews()
+        case .launcher: return launcherViews()
+        case .module(let id):
+            guard let module = modules.first(where: { $0.id == id }) else { return launcherViews() }
+            return [launcherButton()] + module.barViews()
         }
+    }
+
+    // MARK: - Launcher
+
+    static let launcherButtonWidth: CGFloat = 120
+
+    /// One button per app, Claude first.
+    private func launcherViews() -> [NSView] {
+        let claude = HoldButton("Claude", icon: Icon.app.image(), color: claudeTint ?? Self.neutralColor,
+                                width: Self.launcherButtonWidth)
+        claude.onComplete = { [weak self] in self?.openClaude() }
+        var views: [NSView] = [claude]
+        for module in modules {
+            let b = HoldButton(module.title, icon: module.icon.image(), color: module.tint ?? Self.neutralColor,
+                               width: Self.launcherButtonWidth)
+            let id = module.id
+            b.onComplete = { [weak self] in self?.open(moduleId: id) }
+            views.append(b)
+        }
+        return views + [Self.spacer()]
+    }
+
+    private static let neutralColor = NSColor(white: 0.28, alpha: 1)
+
+    /// Back to the launcher. First button on Claude's home and on every module.
+    private func launcherButton() -> HoldButton {
+        let b = iconButton(.symbol("square.grid.2x2"))
+        b.onComplete = { [weak self] in self?.showLauncher() }
+        return b
     }
 
     private func caption(_ text: String) -> NSTextField {
@@ -665,7 +742,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
             TerminalBridge.jump(to: s.terminal)
         }
 
-        return [makeChip(), pager, read, lang, model, sessions, mic, jump]
+        return [launcherButton(), makeChip(), pager, read, lang, model, sessions, mic, jump]
     }
 
     // MARK: - Word-by-word reading
