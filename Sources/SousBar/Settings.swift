@@ -53,6 +53,24 @@ enum Settings {
         set { defaults.set(newValue, forKey: "feedInterval") }
     }
 
+    /// Which pull request events pop up on the bar: "mine" (your PRs and reviews), "all", or "off".
+    static var prPopUp: String {
+        get { defaults.string(forKey: "prPopUp") ?? "mine" }
+        set { defaults.set(newValue, forKey: "prPopUp") }
+    }
+
+    /// The PRs bar shows only your PRs and your review requests.
+    static var prOnlyMine: Bool {
+        get { defaults.bool(forKey: "prOnlyMine") }
+        set { defaults.set(newValue, forKey: "prOnlyMine") }
+    }
+
+    /// Seconds between GitHub checks.
+    static var prInterval: Double {
+        get { defaults.object(forKey: "prInterval") as? Double ?? 60 }
+        set { defaults.set(newValue, forKey: "prInterval") }
+    }
+
     /// The app was called AgentStrip (bundle id local.agentstrip.app). Copies your settings from
     /// there once, so a rename doesn't reset your speed, timeout, voice or bar width.
     static let legacyDomain = "local.agentstrip.app"

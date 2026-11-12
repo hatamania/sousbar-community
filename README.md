@@ -174,6 +174,16 @@ Tokens go in the Keychain (Basic auth with a username, Bearer without). A token 
 
 Feeds are checked every minute (menu: **Check every** 30 s to 15 min) and when your Mac wakes. That's as instant as RSS gets: a feed is only as fresh as the site makes it, and GitHub caches its feeds for a few minutes. The first check of a new feed doesn't announce what's already there.
 
+## Pull requests and CI
+
+**PRs** on the launcher shows every open pull request in your scopes with its CI, one at a time, worst first: failing checks, then reviews waiting on you, changes requested, still running, the rest. The card shows the PR number and repo with a CI summary (✗ 1 failing, ⋯ running, ✓ checks pass), and is red when CI fails, orange when your review is wanted. Swipe the text for the title, author, review state, conflicts and every check (failing first). ‹ › step through, **All / Mine** filters to your PRs and your review requests, ↗ opens the PR. **Tap the card** to list every PR as buttons (PR number, repo, and what matters most: failing, your review, conflicts, approved…); ↑ ↓ page through, tap one to jump to it. **Hold the card** to check now.
+
+It uses your installed GitHub CLI login (`gh auth login`), so SousBar never stores a GitHub token, and works with private and org repos your login can see. One query per check covers everything (1 point of GitHub's 5,000/hour).
+
+The first run watches `involves:@me` plus every org you belong to. Change that in the menu bar chef hat › **Pull Requests**: add or remove scopes (any GitHub search qualifier: `org:acme`, `repo:owner/name`, `label:urgent`…), check every 30 s to 5 min.
+
+A PR pops up on the Touch Bar when its CI fails, CI on yours goes green, your review is requested, or yours is approved or gets changes requested. By default only for your PRs and your reviews; switch **Pop up on the Touch Bar for** to *All pull requests* to also hear about new PRs and anyone's failing CI.
+
 ## Opening it from another app
 
 If MTMR, Pock or BetterTouchTool takes over your whole Touch Bar, it covers the Control Strip pill. Give that app a button that opens SousBar instead:

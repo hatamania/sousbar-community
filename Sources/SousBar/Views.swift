@@ -29,6 +29,8 @@ final class BarLabel: NSTextField {
 /// onPress/onRelease are for push-to-talk.
 final class HoldButton: NSView {
     var onComplete: (() -> Void)?
+    /// holdDuration > 0 only: a quick tap (lifted before the hold fills up) does this instead.
+    var onTap: (() -> Void)?
     var onPress: (() -> Void)?
     var onRelease: (() -> Void)?
 
@@ -184,6 +186,7 @@ final class HoldButton: NSView {
         pressStart = nil
         onRelease?()
         if holdDuration == 0, !cancelled { onComplete?() }
+        if holdDuration > 0, !fired, !cancelled { onTap?() }
     }
 }
 

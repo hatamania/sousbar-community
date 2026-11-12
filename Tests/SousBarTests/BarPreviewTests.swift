@@ -286,6 +286,30 @@ final class BarPreviewTests: XCTestCase {
         Settings.feedPeek = true
     }
 
+    func testPullRequestsScreenFits() {
+        let defaults = UserDefaults(suiteName: "sousbar-preview-prs-\(UUID().uuidString)")!
+        defaults.set(["org:acme"], forKey: "prScopes")
+        let pulls = PRStore(defaults: defaults)
+        let module = PRModule(store: pulls)
+        bar.modules = [module]
+        let reply = GHFixture.reply(scopes: [[
+            GHFixture.pr("acme/storefront", 470, title: "Fix login redirect after SSO timeout", author: "ann", rollup: "FAILURE",
+                         checks: [GHFixture.run("Lint", "SUCCESS"), GHFixture.run("Type Check", "SUCCESS"),
+                                  GHFixture.run("Unit Tests (1/2)", "FAILURE"), GHFixture.run("Build", nil, status: "IN_PROGRESS"),
+                                  GHFixture.run("Coverage", "SUCCESS")],
+                         review: "CHANGES_REQUESTED", mergeable: "CONFLICTING"),
+            GHFixture.pr("acme/api", 12, title: "Add rate limits"),
+        ]])
+        pulls.received(GHCLI.Output(stdout: reply, stderr: "", status: 0), scopes: ["org:acme"])
+        bar.mode = .module("prs")
+        XCTAssertEqual(render("10-prs"), [])
+        module.showList()
+        XCTAssertEqual(render("10-prs-list"), [])
+        module.barViews().compactMap { $0 as? HoldButton }.first?.onComplete?() // back
+        bar.mode = .launcher
+        XCTAssertEqual(render("10-launcher"), [])
+    }
+
     func testSplitPutsButtonsRightOfTheText() {
         let pager = PagedTextView()
         let a = HoldButton("A"), b = HoldButton("B"), chip = HoldButton("chip")

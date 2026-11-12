@@ -561,10 +561,16 @@ final class TouchBarController: NSObject, NSTouchBarDelegate, BarHost {
             let views = module.barViews()
             // Touching anything in a module that popped up by itself keeps it open.
             for case let b as HoldButton in views {
-                let action = b.onComplete
+                let action = b.onComplete, tap = b.onTap
                 b.onComplete = { [weak self] in
                     self?.isPeeking = false
                     action?()
+                }
+                if let tap {
+                    b.onTap = { [weak self] in
+                        self?.isPeeking = false
+                        tap()
+                    }
                 }
             }
             for case let t as ScrollingTextView in views {

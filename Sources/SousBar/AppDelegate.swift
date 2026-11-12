@@ -8,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let feeds = FeedStore()
     private var feedsModule: FeedsModule!
+    private let pulls = PRStore()
+    private var prModule: PRModule!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Only one copy at a time.
@@ -60,10 +62,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         touchBar.install()
         feedsModule = FeedsModule(store: feeds)
-        touchBar.modules = [feedsModule]
+        prModule = PRModule(store: pulls)
+        touchBar.modules = [feedsModule, prModule]
         feeds.start(interval: Settings.feedInterval)
+        pulls.start(interval: Settings.prInterval)
         NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in self?.feeds.checkAll() }
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.feeds.checkAll()
+            self?.pulls.check()
+        }
         setUpStatusItem()
         HookConnection.syncIfConnected()
         // After the menu bar item exists, so the app is fully up when the question appears.
@@ -219,6 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(voiceItem)
 
         menu.addItem(feedsMenuItem())
+        menu.addItem(pullsMenuItem())
 
         if LoginItem.isSupported {
             let login = item("Launch at login", #selector(toggleLaunchAtLogin))
@@ -298,6 +306,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let top = NSMenuItem(title: unread > 0 ? "Feeds (\(unread) new)" : "Feeds", action: nil, keyEquivalent: "")
         top.submenu = sub
         return top
+    }
+
+    // MARK: - Pull requests
+
+    private func pullsMenuItem() -> NSMenuItem {
+        let sub = NSMenu()
+        if let error = pulls.error {
+            sub.addItem(disabled("⚠︎ \(TextTools.truncate(error, 70))"))
+        } else if let at = pulls.lastChecked {
+            let n = pulls.prs.count, mine = pulls.prs.filter(\.involvesYou).count
+            sub.addItem(disabled("\(n) open · \(mine) yours or for your review · checked \(FeedDate.ago(at))"))
+        }
+        for (scope, total) in pulls.truncated {
+            sub.addItem(disabled("“\(scope)” has \(total) open; showing the latest \(PRQuery.perScope)"))
+        }
+        sub.addItem(.separator())
+        sub.addItem(disabled("Scopes (GitHub search)"))
+        for scope in pulls.scopes {
+            let entry = NSMenuItem(title: scope, action: nil, keyEquivalent: "")
+            let actions = NSMenu()
+            let remove = item("Remove “\(scope)”", #selector(removeScope(_:)))
+            remove.representedObject = scope
+            actions.addItem(remove)
+            entry.submenu = actions
+            sub.addItem(entry)
+        }
+        sub.addItem(item("Add Scope…", #selector(addScope)))
+        sub.addItem(.separator())
+        sub.addItem(item("Check Now", #selector(checkPulls)))
+        sub.addItem(item("Show Pull Requests on Touch Bar", #selector(openPulls)))
+        sub.addItem(.separator())
+        let pop = NSMenu()
+        for (label, value) in [("Mine and my reviews", "mine"), ("All pull requests", "all"), ("Never", "off")] {
+            let i = item(label, #selector(setPRPopUp(_:)))
+            i.representedObject = value
+            i.state = Settings.prPopUp == value ? .on : .off
+            pop.addItem(i)
+        }
+        let popItem = NSMenuItem(title: "Pop up on the Touch Bar for", action: nil, keyEquivalent: "")
+        popItem.submenu = pop
+        sub.addItem(popItem)
+        let every = NSMenu()
+        for (label, value) in [("30 seconds", 30.0), ("1 minute", 60.0), ("5 minutes", 300.0)] {
+            let i = item(label, #selector(setPRInterval(_:)))
+            i.representedObject = value
+            i.state = Settings.prInterval == value ? .on : .off
+            every.addItem(i)
+        }
+        let everyItem = NSMenuItem(title: "Check every", action: nil, keyEquivalent: "")
+        everyItem.submenu = every
+        sub.addItem(everyItem)
+
+        let n = prModule?.attention.count ?? 0
+        let top = NSMenuItem(title: n > 0 ? "Pull Requests (\(n) need you)" : "Pull Requests", action: nil, keyEquivalent: "")
+        top.submenu = sub
+        return top
+    }
+
+    @objc private func addScope() {
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 340, height: 24))
+        field.placeholderString = "org:acme   or   repo:owner/name"
+        let alert = NSAlert()
+        alert.messageText = "Add a pull request scope"
+        alert.informativeText = """
+        Any GitHub search qualifier. SousBar shows every open PR it matches. Examples:
+        • org:ins-enco: every repo in an org
+        • repo:hatamania/sousbar-community: one repo
+        • author:someone, team-review-requested:org/team, label:urgent
+        """
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Add")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let scope = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !scope.isEmpty { pulls.add(scope: scope) }
+    }
+
+    @objc private func removeScope(_ sender: NSMenuItem) {
+        if let scope = sender.representedObject as? String { pulls.remove(scope: scope) }
+    }
+
+    @objc private func checkPulls() { pulls.check() }
+
+    @objc private func openPulls() { touchBar.open(moduleId: "prs") }
+
+    @objc private func setPRPopUp(_ sender: NSMenuItem) {
+        if let v = sender.representedObject as? String { Settings.prPopUp = v }
+    }
+
+    @objc private func setPRInterval(_ sender: NSMenuItem) {
+        guard let v = sender.representedObject as? Double else { return }
+        Settings.prInterval = v
+        pulls.start(interval: v)
     }
 
     @objc private func addFeed() {
