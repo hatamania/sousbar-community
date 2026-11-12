@@ -9,7 +9,7 @@ final class LauncherTests: XCTestCase {
         let title = "RSS"
         let icon = Icon.symbol("dot.radiowaves.up.forward")
         var tint: NSColor?
-        var onChange: (() -> Void)?
+        weak var host: BarHost?
         var headline = "First headline"
         func barViews() -> [NSView] { [NSTextField(labelWithString: headline)] }
     }
@@ -64,7 +64,7 @@ final class LauncherTests: XCTestCase {
     func testModuleRedrawsWhenItSaysSo() {
         XCTAssertTrue(bar.open(moduleId: "rss"))
         module.headline = "Breaking"
-        module.onChange?()
+        bar.moduleDidChange(module)
         XCTAssertEqual((bar.itemViews.dropFirst().first as? NSTextField)?.stringValue, "Breaking")
     }
 

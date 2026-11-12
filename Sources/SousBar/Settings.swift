@@ -41,6 +41,18 @@ enum Settings {
         set { defaults.set(newValue, forKey: "autoRead") }
     }
 
+    /// Show new feed items on the Touch Bar for a few seconds as they arrive.
+    static var feedPeek: Bool {
+        get { defaults.object(forKey: "feedPeek") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "feedPeek") }
+    }
+
+    /// Seconds between feed checks.
+    static var feedInterval: Double {
+        get { defaults.object(forKey: "feedInterval") as? Double ?? 60 }
+        set { defaults.set(newValue, forKey: "feedInterval") }
+    }
+
     /// The app was called AgentStrip (bundle id local.agentstrip.app). Copies your settings from
     /// there once, so a rename doesn't reset your speed, timeout, voice or bar width.
     static let legacyDomain = "local.agentstrip.app"

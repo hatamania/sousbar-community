@@ -6,6 +6,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let server = HookServer()
     private var touchBar: TouchBarController!
     private var statusItem: NSStatusItem!
+    private let feeds = FeedStore()
+    private var feedsModule: FeedsModule!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Only one copy at a time.
@@ -57,6 +59,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             NSLog("SousBar: system Touch Bar API not available on this macOS version")
         }
         touchBar.install()
+        feedsModule = FeedsModule(store: feeds)
+        touchBar.modules = [feedsModule]
+        feeds.start(interval: Settings.feedInterval)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in self?.feeds.checkAll() }
         setUpStatusItem()
         HookConnection.syncIfConnected()
         // After the menu bar item exists, so the app is fully up when the question appears.
@@ -211,6 +218,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         voiceItem.submenu = voiceMenu
         menu.addItem(voiceItem)
 
+        menu.addItem(feedsMenuItem())
+
         if LoginItem.isSupported {
             let login = item("Launch at login", #selector(toggleLaunchAtLogin))
             login.state = LoginItem.isEnabled ? .on : .off
@@ -241,6 +250,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func showBar() { touchBar.present(auto: false) }
+
+    // MARK: - Feeds
+
+    private func feedsMenuItem() -> NSMenuItem {
+        let sub = NSMenu()
+        for source in feeds.sources {
+            var title = source.name
+            if let error = feeds.errors[source.id] {
+                title += " — ⚠︎ \(error)"
+            } else {
+                let n = feeds.unread.filter { $0.sourceId == source.id }.count
+                if n > 0 { title += " — \(n) new" }
+            }
+            let entry = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let actions = NSMenu()
+            let remove = item("Remove “\(source.name)”", #selector(removeFeed(_:)))
+            remove.representedObject = source.id
+            actions.addItem(disabled(TextTools.truncate(source.url, 60)))
+            actions.addItem(remove)
+            entry.submenu = actions
+            sub.addItem(entry)
+        }
+        if feeds.sources.isEmpty { sub.addItem(disabled("No feeds yet")) }
+        sub.addItem(.separator())
+        sub.addItem(item("Add Feed…", #selector(addFeed)))
+        let check = item("Check Now", #selector(checkFeeds))
+        check.isEnabled = !feeds.sources.isEmpty
+        sub.addItem(check)
+        sub.addItem(item("Show Feeds on Touch Bar", #selector(openFeeds)))
+        sub.addItem(.separator())
+        let peek = item("Pop up new items on the Touch Bar", #selector(toggleFeedPeek))
+        peek.state = Settings.feedPeek ? .on : .off
+        sub.addItem(peek)
+        let every = NSMenu()
+        for (label, value) in [("30 seconds", 30.0), ("1 minute", 60.0), ("5 minutes", 300.0), ("15 minutes", 900.0)] {
+            let i = item(label, #selector(setFeedInterval(_:)))
+            i.representedObject = value
+            i.state = Settings.feedInterval == value ? .on : .off
+            every.addItem(i)
+        }
+        let everyItem = NSMenuItem(title: "Check every", action: nil, keyEquivalent: "")
+        everyItem.submenu = every
+        sub.addItem(everyItem)
+
+        let unread = feeds.unread.count
+        let top = NSMenuItem(title: unread > 0 ? "Feeds (\(unread) new)" : "Feeds", action: nil, keyEquivalent: "")
+        top.submenu = sub
+        return top
+    }
+
+    @objc private func addFeed() {
+        guard let input = FeedForm.ask() else { return }
+        feeds.add(name: input.name, url: input.url, username: input.username, token: input.token)
+    }
+
+    @objc private func removeFeed(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let source = feeds.sources.first(where: { $0.id == id }) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Remove “\(source.name)”?"
+        alert.informativeText = "Its saved token is deleted from the Keychain too."
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn { feeds.remove(id) }
+    }
+
+    @objc private func checkFeeds() { feeds.checkAll() }
+
+    @objc private func openFeeds() { touchBar.open(moduleId: "feeds") }
+
+    @objc private func toggleFeedPeek() { Settings.feedPeek.toggle() }
+
+    @objc private func setFeedInterval(_ sender: NSMenuItem) {
+        guard let v = sender.representedObject as? Double else { return }
+        Settings.feedInterval = v
+        feeds.start(interval: v)
+    }
 
     @objc private func toggleAutoExpand() { Settings.autoExpand.toggle() }
 

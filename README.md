@@ -157,6 +157,23 @@ Tapping the pill opens the **launcher**: one button per app, Claude first. Tap *
 
 To add an app (an RSS feed, a build status…), write a class that conforms to `BarModule` (`Sources/SousBar/Modules.swift`) and add it to `touchBar.modules` in `AppDelegate`. It gets a launcher button and, when tapped, the whole bar between the back and hide buttons.
 
+## Feeds (GitHub, Jira, any RSS or Atom)
+
+**Feeds** on the launcher shows new items from your feeds, one at a time: ‹ › to step through, ↗ to open the link, ✓ to mark all read. A new item pops up on the Touch Bar for 8 seconds, then hands it back, unless you touch it. It never covers an approval or dictation.
+
+Add one from the menu bar chef hat › **Feeds › Add Feed…**:
+
+| Source | Feed URL | Login |
+|---|---|---|
+| GitHub releases | `https://github.com/OWNER/REPO/releases.atom` | none |
+| GitHub commits | `https://github.com/OWNER/REPO/commits/BRANCH.atom` | none |
+| Your GitHub dashboard (incl. private repos) | the `…private.atom?token=…` link from your dashboard's feed | the token is in the URL |
+| Jira Cloud activity | `https://SITE.atlassian.net/activity?maxResults=20` (filter with `&streams=key+IS+PROJ`) | Username = your Atlassian email, Token = an [API token](https://id.atlassian.com/manage-profile/security/api-tokens) |
+
+Tokens go in the Keychain (Basic auth with a username, Bearer without). A token inside a URL is stored with the URL in SousBar's preferences.
+
+Feeds are checked every minute (menu: **Check every** 30 s to 15 min) and when your Mac wakes. That's as instant as RSS gets: a feed is only as fresh as the site makes it, and GitHub caches its feeds for a few minutes. The first check of a new feed doesn't announce what's already there.
+
 ## Opening it from another app
 
 If MTMR, Pock or BetterTouchTool takes over your whole Touch Bar, it covers the Control Strip pill. Give that app a button that opens SousBar instead:

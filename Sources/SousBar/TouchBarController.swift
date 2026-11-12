@@ -6,7 +6,7 @@ import AppKit
 ///  • Nothing here activates an app or takes keyboard focus, except "Jump ↗" (long-press).
 ///  • When Claude needs an answer the full bar opens by itself (option A), and goes
 ///    back to your app's own Touch Bar once you've answered.
-final class TouchBarController: NSObject, NSTouchBarDelegate {
+final class TouchBarController: NSObject, NSTouchBarDelegate, BarHost {
     static let pillId = NSTouchBarItem.Identifier(rawValue: "local.sousbar.pill")
     static let mainId = NSTouchBarItem.Identifier(rawValue: "local.sousbar.main")
     static let rightId = NSTouchBarItem.Identifier(rawValue: "local.sousbar.right")
@@ -47,15 +47,12 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     /// Apps on the launcher after Claude (RSS and so on). See `BarModule`.
     var modules: [BarModule] = [] {
-        didSet {
-            for m in modules {
-                m.onChange = { [weak self, weak m] in
-                    guard let self, let m, self.isPresented else { return }
-                    if self.mode == .launcher || self.mode == .module(m.id) { self.rebuild() }
-                }
-            }
-        }
+        didSet { for m in modules { m.host = self } }
     }
+    /// A module showed itself for something new and you haven't touched it yet: it closes by itself.
+    private(set) var isPeeking = false
+    private var peekToken = 0
+    static let peekDuration: TimeInterval = 8
 
     private(set) var isPresented = false
     private var autoOpened = false
@@ -158,6 +155,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     /// Claude's bar (the session home), opening the bar first if needed.
     func openClaude() {
+        isPeeking = false
         if !isPresented { present(auto: false) }
         mode = .normal
         rebuild()
@@ -176,6 +174,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     }
 
     func showLauncher() {
+        isPeeking = false
         if !isPresented { present(auto: false); return }
         autoOpened = false // you're browsing now; don't close when the approval is answered
         mode = .launcher
@@ -187,6 +186,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         if voice.isRecording { voice.cancel() }
         isPresented = false
         autoOpened = false
+        isPeeking = false
         mode = .normal
         systemMinimize(bar)
         updatePill()
@@ -197,6 +197,11 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     func handleNewPending(_ item: PendingItem) {
         mode = .normal // an approval always takes over from the pickers
+        if isPeeking {
+            // The bar was only up to show a feed item: close it again once this is answered.
+            isPeeking = false
+            autoOpened = true
+        }
         // A leftover message ("Sent to …") must never cover what the approval is asking.
         flashMessage = nil
         flashToken += 1
@@ -553,7 +558,38 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         case .launcher: return launcherViews()
         case .module(let id):
             guard let module = modules.first(where: { $0.id == id }) else { return launcherViews() }
-            return [launcherButton()] + module.barViews()
+            let views = module.barViews()
+            // Touching anything in a module that popped up by itself keeps it open.
+            for case let b as HoldButton in views {
+                let action = b.onComplete
+                b.onComplete = { [weak self] in
+                    self?.isPeeking = false
+                    action?()
+                }
+            }
+            return [launcherButton()] + views
+        }
+    }
+
+    // MARK: - BarHost
+
+    func moduleDidChange(_ module: BarModule) {
+        guard isPresented else { return }
+        if mode == .launcher || mode == .module(module.id) { rebuild() }
+    }
+
+    func moduleWantsAttention(_ module: BarModule) {
+        // Never interrupt an approval, dictation, or whatever you're doing on the bar.
+        guard !isPresented, store.pending.isEmpty, !voice.isRecording else { return }
+        present(auto: false)
+        mode = .module(module.id)
+        rebuild()
+        isPeeking = true
+        peekToken += 1
+        let token = peekToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.peekDuration) { [weak self] in
+            guard let self, self.isPeeking, self.peekToken == token, self.mode == .module(module.id) else { return }
+            self.minimize()
         }
     }
 

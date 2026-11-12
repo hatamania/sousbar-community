@@ -258,6 +258,28 @@ final class BarPreviewTests: XCTestCase {
         check("permission")
     }
 
+    func testFeedsScreenFits() {
+        let feeds = FeedStore(defaults: UserDefaults(suiteName: "sousbar-preview-\(UUID().uuidString)")!)
+        feeds.fetch = { _, _ in }
+        feeds.token = { _ in nil }
+        feeds.storeToken = { _, _ in }
+        let module = FeedsModule(store: feeds)
+        bar.modules = [module]
+        let id = feeds.add(name: "Jira", url: "https://x/activity", username: nil, token: nil).id
+        let ok = HTTPURLResponse(url: URL(string: "https://x")!, statusCode: 200, httpVersion: nil, headerFields: [:])
+        feeds.received(id, FeedStoreTests.rss(["a"]), ok, nil)
+        let long = "<rss><channel><item><guid>b</guid><title>Ann Lee changed the status to Done on SB-12 - Touch Bar launcher with modules for feeds and more and even more words</title>" +
+            "<link>https://x/b</link><pubDate>\(Date().addingTimeInterval(-300).rfc822)</pubDate></item></channel></rss>"
+        bar.systemPresent = { _, _ in }
+        Settings.feedPeek = false
+        feeds.received(id, Data(long.utf8), ok, nil)
+        bar.mode = .module("feeds")
+        XCTAssertEqual(render("9-feeds"), [])
+        bar.mode = .launcher
+        XCTAssertEqual(render("9-launcher"), [])
+        Settings.feedPeek = true
+    }
+
     func testSplitPutsButtonsRightOfTheText() {
         let pager = PagedTextView()
         let a = HoldButton("A"), b = HoldButton("B"), chip = HoldButton("chip")
@@ -271,5 +293,14 @@ final class BarPreviewTests: XCTestCase {
         render("chip")
         let chip = bar.itemViews.dropFirst().first // after the launcher button
         XCTAssertEqual(chip?.frame.width ?? 0, TouchBarController.chipWidth, accuracy: 0.5)
+    }
+}
+
+private extension Date {
+    var rfc822: String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
+        return f.string(from: self)
     }
 }
