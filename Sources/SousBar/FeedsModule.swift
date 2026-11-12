@@ -13,6 +13,12 @@ final class FeedsModule: BarModule {
     /// Opens a link. Swappable so tests never launch a browser.
     var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
     private var index = 0
+    /// Where you'd scrolled to in the item on screen, so a redraw doesn't throw you back to the start.
+    private var scroll: (id: String, offset: CGFloat)?
+    /// Shown under a feed's name for a moment after you hold it: "Checking…", then the result.
+    private(set) var status: [String: String] = [:]
+    private var statusToken = 0
+    static var statusDuration: TimeInterval = 3
 
     init(store: FeedStore) {
         self.store = store
@@ -43,11 +49,18 @@ final class FeedsModule: BarModule {
         guard let entry = current else { return [message(emptyText), TouchBarController.spacer()] }
         let list = entries
 
-        let failing = store.errors.isEmpty ? nil : "⚠︎ \(store.errors.count) failing"
-        let source = HoldButton(entry.sourceName, subtitle: failing, color: NSColor(white: 0.2, alpha: 1),
+        // Hold the feed's name to check it now.
+        let failing = store.errors[entry.sourceId].map { "⚠︎ \($0)" }
+        let source = HoldButton(entry.sourceName, subtitle: status[entry.sourceId] ?? failing ?? "hold ↻", iconSize: 0,
+                                color: NSColor(white: 0.2, alpha: 1), hold: 0.6,
                                 width: TouchBarController.chipWidth, twoLine: true)
+        let sourceId = entry.sourceId
+        source.onComplete = { [weak self] in self?.refresh(sourceId) }
 
-        let text = message(entry.item.title, dim: !showingUnread)
+        let text = ScrollingTextView(Self.body(entry.item, dim: !showingUnread),
+                                     offset: scroll?.id == entry.item.id ? scroll!.offset : 0)
+        let itemId = entry.item.id
+        text.onScroll = { [weak self] in self?.scroll = (itemId, $0) }
         let age = caption([FeedDate.ago(entry.item.date), "\(index + 1)/\(list.count)\(showingUnread ? " new" : "")"]
             .filter { !$0.isEmpty }.joined(separator: " · "))
 
@@ -77,6 +90,30 @@ final class FeedsModule: BarModule {
         return "Nothing yet. Checking your feeds…"
     }
 
+    /// Checks one feed now (hold its name).
+    func refresh(_ sourceId: String) {
+        guard let source = store.sources.first(where: { $0.id == sourceId }) else { return }
+        statusToken += 1
+        status[sourceId] = "Checking…"
+        host?.moduleDidChange(self)
+        store.check(source) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .new(let n): self.status[sourceId] = "\(n) new"
+            case .upToDate: self.status[sourceId] = "Up to date"
+            case .failed(let error): self.status[sourceId] = "⚠︎ \(error)"
+            }
+            self.statusToken += 1
+            let token = self.statusToken
+            self.host?.moduleDidChange(self)
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.statusDuration) { [weak self] in
+                guard let self, self.statusToken == token else { return }
+                self.status[sourceId] = nil
+                self.host?.moduleDidChange(self)
+            }
+        }
+    }
+
     private func step(_ delta: Int) {
         index += delta
         host?.moduleDidChange(self)
@@ -88,6 +125,21 @@ final class FeedsModule: BarModule {
     }
 
     // MARK: - Views
+
+    /// Title in bold, then the whole content, on one line to scroll through.
+    static func body(_ item: FeedItem, dim: Bool) -> NSAttributedString {
+        let s = NSMutableAttributedString(string: item.title, attributes: [
+            .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
+            .foregroundColor: NSColor(white: 1, alpha: dim ? 0.65 : 1),
+        ])
+        if !item.content.isEmpty {
+            s.append(NSAttributedString(string: "   " + item.content, attributes: [
+                .font: NSFont.systemFont(ofSize: 15),
+                .foregroundColor: NSColor(white: 1, alpha: dim ? 0.5 : 0.8),
+            ]))
+        }
+        return s
+    }
 
     private func message(_ s: String, dim: Bool = false) -> NSTextField {
         let l = NSTextField(labelWithString: s)

@@ -123,7 +123,9 @@ final class FeedStoreTests: XCTestCase {
         XCTAssertEqual(store.unread.map(\.sourceName), ["Jira"])
 
         ok(feed.id, Self.rss(["a", "b", "c"]))
-        XCTAssertEqual(updates.last, [], "same items again: nothing new")
+        let count = updates.count
+        ok(feed.id, Self.rss(["a", "b", "c"]))
+        XCTAssertEqual(updates.count, count, "nothing changed: no redraw")
         store.markAllRead()
         XCTAssertTrue(store.unread.isEmpty)
     }
@@ -169,6 +171,17 @@ final class FeedsModuleTests: XCTestCase {
     private var module: FeedsModule!
     private var opened: [URL] = []
     private var feedId = ""
+    /// Requests waiting for a response, oldest first.
+    private var answer: [(Data?, HTTPURLResponse?, Error?) -> Void] = []
+
+    /// Answers the oldest request and lets the main queue deliver it.
+    private func respond(_ data: Data?, status: Int = 200) {
+        let r = HTTPURLResponse(url: URL(string: "https://x")!, statusCode: status, httpVersion: nil, headerFields: [:])
+        answer.removeFirst()(data, r, nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    }
+
+    private var chip: HoldButton? { buttons.first { $0.title == "GitHub" } }
 
     override func setUp() {
         Settings.feedPeek = true
@@ -177,7 +190,7 @@ final class FeedsModuleTests: XCTestCase {
         bar.systemPresent = { _, _ in }
         bar.systemMinimize = { _ in }
         feeds = FeedStore(defaults: UserDefaults(suiteName: "sousbar-feeds-\(UUID().uuidString)")!)
-        feeds.fetch = { _, _ in }
+        feeds.fetch = { [unowned self] _, done in answer.append(done) }
         feeds.token = { _ in nil }
         feeds.storeToken = { _, _ in }
         module = FeedsModule(store: feeds)
@@ -193,7 +206,9 @@ final class FeedsModuleTests: XCTestCase {
     }
 
     private var buttons: [HoldButton] { bar.itemViews.compactMap { $0 as? HoldButton } }
-    private var texts: [String] { bar.itemViews.compactMap { ($0 as? NSTextField)?.stringValue } }
+    private var texts: [String] {
+        bar.itemViews.compactMap { ($0 as? NSTextField)?.stringValue ?? ($0 as? ScrollingTextView)?.string }
+    }
 
     func testNewItemPopsUpOnTheBar() {
         XCTAssertFalse(bar.isPresented, "the first check is quiet")
@@ -201,7 +216,7 @@ final class FeedsModuleTests: XCTestCase {
         XCTAssertTrue(bar.isPresented)
         XCTAssertTrue(bar.isPeeking)
         XCTAssertEqual(bar.mode, .module("feeds"))
-        XCTAssertTrue(texts.contains("Item b"), "\(texts)")
+        XCTAssertTrue(texts.contains { $0.hasPrefix("Item b") }, "\(texts)")
         XCTAssertEqual(buttons.first?.title, "", "the launcher button leads")
         XCTAssertTrue(buttons.contains { $0.title == "GitHub" })
     }
@@ -238,5 +253,122 @@ final class FeedsModuleTests: XCTestCase {
         feeds.remove(feedId)
         bar.open(moduleId: "feeds")
         XCTAssertTrue(texts.contains { $0.contains("Add Feed") }, "\(texts)")
+    }
+}
+
+final class FeedContentTests: XCTestCase {
+    func testHTMLBodyBecomesOneReadableLine() {
+        let html = "<p>First &amp; <b>bold</b> paragraph.</p>\n<ul><li>one</li><li>two</li></ul><br/>Tail"
+        XCTAssertEqual(FeedText.plain(html), "First & bold paragraph. · one · two · Tail")
+    }
+
+    func testParserKeepsTheFullestBody() throws {
+        let xml = """
+        <rss xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><item><guid>1</guid><title>T</title>
+        <description>Short teaser</description>
+        <content:encoded><![CDATA[<p>The whole story.</p><p>Second part.</p>]]></content:encoded>
+        </item></channel></rss>
+        """
+        let item = try XCTUnwrap(FeedParser.parse(Data(xml.utf8))?.first)
+        XCTAssertEqual(item.content, "The whole story. · Second part.")
+    }
+
+    func testAtomEscapedHTMLContent() throws {
+        let xml = """
+        <feed xmlns="http://www.w3.org/2005/Atom"><entry><id>x</id><title>v2</title>
+        <content type="html">&lt;h2&gt;Changes&lt;/h2&gt;&lt;ul&gt;&lt;li&gt;Faster&lt;/li&gt;&lt;/ul&gt;</content></entry></feed>
+        """
+        XCTAssertEqual(try XCTUnwrap(FeedParser.parse(Data(xml.utf8))?.first).content, "Changes · Faster")
+    }
+
+    func testLongContentIsCapped() {
+        let long = String(repeating: "word ", count: 5000)
+        XCTAssertLessThanOrEqual(FeedText.plain(long).count, FeedText.maxContent + 1)
+    }
+}
+
+final class ScrollPhysicsTests: XCTestCase {
+    func testFollowsTheFinger() {
+        var p = ScrollPhysics(maxOffset: 500)
+        p.drag(by: -120) // finger moves left: text moves left, you read further
+        XCTAssertEqual(p.offset, 120)
+        p.drag(by: 20)
+        XCTAssertEqual(p.offset, 100)
+    }
+
+    func testGlidesAfterAFlickAndSlowsDown() {
+        var p = ScrollPhysics(maxOffset: 5000)
+        p.release(fingerVelocity: -800)
+        var steps = 0, last: CGFloat = 0
+        while p.step(1.0 / 60) {
+            steps += 1
+            XCTAssertGreaterThan(p.offset, last)
+            last = p.offset
+        }
+        XCTAssertGreaterThan(p.offset, 150, "a flick carries on")
+        XCTAssertLessThan(steps, 60 * 4, "and comes to rest")
+    }
+
+    func testStopsAtTheEnds() {
+        var p = ScrollPhysics(maxOffset: 100, offset: 90)
+        p.release(fingerVelocity: -2000)
+        while p.step(1.0 / 60) {}
+        XCTAssertEqual(p.offset, 100)
+
+        p.release(fingerVelocity: 2000)
+        while p.step(1.0 / 60) {}
+        XCTAssertEqual(p.offset, 0)
+    }
+
+    func testRubberBandsPastAnEndAndSpringsBack() {
+        var p = ScrollPhysics(maxOffset: 100)
+        p.drag(by: 10) // already at the start: pulls a little past it
+        p.drag(by: 40)
+        XCTAssertLessThan(p.offset, 0)
+        XCTAssertGreaterThan(p.offset, -40, "resists")
+        p.release(fingerVelocity: 0)
+        while p.step(1.0 / 60) {}
+        XCTAssertEqual(p.offset, 0)
+    }
+
+    func testProgress() {
+        XCTAssertEqual(ScrollPhysics(maxOffset: 200, offset: 50).progress, 0.25)
+        XCTAssertEqual(ScrollPhysics(maxOffset: 0).progress, 1, "everything fits")
+    }
+}
+
+extension FeedsModuleTests {
+    func testHoldingTheFeedNameChecksItNow() {
+        answer.removeAll() // the check from adding it
+        bar.open(moduleId: "feeds")
+        XCTAssertEqual(chip?.subtitle, "hold ↻")
+
+        chip?.onComplete?() // the hold filled up
+        XCTAssertEqual(answer.count, 1, "fetched right away")
+        XCTAssertEqual(chip?.subtitle, "Checking…")
+
+        respond(FeedStoreTests.rss(["a", "b", "c"]))
+        XCTAssertEqual(chip?.subtitle, "2 new")
+        XCTAssertTrue(texts.contains { $0.hasPrefix("Item c") }, "shows the newest: \(texts)")
+
+        chip?.onComplete?()
+        respond(FeedStoreTests.rss(["a", "b", "c"]))
+        XCTAssertEqual(chip?.subtitle, "Up to date")
+
+        chip?.onComplete?()
+        respond(Data(), status: 401)
+        XCTAssertEqual(chip?.subtitle, "⚠︎ HTTP 401: check the login")
+    }
+
+    func testRefreshStatusGoesAway() {
+        FeedsModule.statusDuration = 0.05
+        defer { FeedsModule.statusDuration = 3 }
+        answer.removeAll()
+        bar.open(moduleId: "feeds")
+        chip?.onComplete?()
+        respond(FeedStoreTests.rss(["a"]))
+        XCTAssertEqual(chip?.subtitle, "Up to date")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(chip?.subtitle, "hold ↻")
     }
 }

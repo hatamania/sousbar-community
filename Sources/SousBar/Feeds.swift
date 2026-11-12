@@ -8,6 +8,8 @@ struct FeedItem: Equatable {
     var title: String
     var link: URL?
     var date: Date?
+    /// The body as plain text (description / summary / content), "" if the feed has none.
+    var content: String = ""
 }
 
 /// A feed you added: an RSS or Atom URL (GitHub, Jira, a blog…), with optional login.
@@ -97,12 +99,28 @@ enum FeedParser {
             guard let id = fields["guid"] ?? fields["id"] ?? linkString ?? (title.isEmpty ? nil : title + (fields["pubdate"] ?? "")) else {
                 return nil
             }
-            return FeedItem(id: id, title: title.isEmpty ? "(untitled)" : title, link: link, date: date)
+            // The fullest body the feed offers.
+            let body = ["encoded", "content", "description", "summary"].lazy.compactMap { self.fields[$0] }.first ?? ""
+            var content = FeedText.plain(body)
+            if content == title { content = "" }
+            return FeedItem(id: id, title: title.isEmpty ? "(untitled)" : title, link: link, date: date, content: content)
         }
     }
 }
 
 enum FeedText {
+    static let maxContent = 6000
+
+    /// HTML body → one line of plain text: paragraphs and list items become " · ", capped in length.
+    static func plain(_ html: String) -> String {
+        let blocks = html.replacingOccurrences(of: "(?i)<br\\s*/?>|</(p|li|div|h[1-6]|tr|blockquote|pre)>",
+                                               with: " \u{E000} ", options: .regularExpression)
+        let text = clean(blocks)
+            .replacingOccurrences(of: "(\\s*\u{E000}\\s*)+", with: " · ", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: " ·"))
+        return text.count > maxContent ? String(text.prefix(maxContent)) + "…" : text
+    }
+
     /// Titles are often HTML (Jira's activity stream wraps names in links): tags out, entities
     /// decoded, whitespace collapsed.
     static func clean(_ s: String) -> String {
@@ -275,7 +293,14 @@ final class FeedStore {
         checkAll()
     }
 
-    func checkAll() { sources.forEach(check) }
+    func checkAll() { sources.forEach { check($0) } }
+
+    /// How a check went (for "Up to date" / "2 new" / the error after a manual refresh).
+    enum CheckResult: Equatable {
+        case new(Int)
+        case upToDate
+        case failed(String)
+    }
 
     func request(for source: FeedSource) -> URLRequest? {
         guard let url = URL(string: source.url), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
@@ -290,39 +315,36 @@ final class FeedStore {
         return r
     }
 
-    func check(_ source: FeedSource) {
+    /// Fetches a feed now. `done` runs on the main thread with how it went.
+    func check(_ source: FeedSource, done: ((CheckResult) -> Void)? = nil) {
         guard let request = request(for: source) else {
-            errors[source.id] = "not a web address"
-            onUpdate?([])
+            let result = fail(source.id, "not a web address") // not inside done?(…): that skips it when done is nil
+            done?(result)
             return
         }
         fetch(request) { [weak self] data, response, error in
-            DispatchQueue.main.async { self?.received(source.id, data, response, error) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let result = self.received(source.id, data, response, error)
+                done?(result)
+            }
         }
     }
 
     /// Internal so tests can feed responses in directly.
-    func received(_ id: String, _ data: Data?, _ response: HTTPURLResponse?, _ error: Error?) {
-        guard let source = sources.first(where: { $0.id == id }) else { return } // removed meanwhile
-        if let error {
-            errors[id] = (error as NSError).localizedDescription
-            onUpdate?([])
-            return
-        }
+    @discardableResult
+    func received(_ id: String, _ data: Data?, _ response: HTTPURLResponse?, _ error: Error?) -> CheckResult {
+        guard let source = sources.first(where: { $0.id == id }) else { return .upToDate } // removed meanwhile
+        if let error { return fail(id, (error as NSError).localizedDescription) }
         if let status = response?.statusCode {
-            if status == 304 { return }
+            if status == 304 { return .upToDate }
             guard (200..<300).contains(status) else {
-                errors[id] = status == 401 || status == 403 ? "HTTP \(status): check the login" : "HTTP \(status)"
-                onUpdate?([])
-                return
+                return fail(id, status == 401 || status == 403 ? "HTTP \(status): check the login" : "HTTP \(status)")
             }
         }
-        guard let data, let parsed = FeedParser.parse(data) else {
-            errors[id] = "not an RSS or Atom feed"
-            onUpdate?([])
-            return
-        }
+        guard let data, let parsed = FeedParser.parse(data) else { return fail(id, "not an RSS or Atom feed") }
         if let etag = response?.value(forHTTPHeaderField: "ETag") { etags[id] = etag }
+        let before = (items[id], errors[id])
         errors[id] = nil
 
         let sorted = parsed.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
@@ -337,6 +359,17 @@ final class FeedStore {
         // The first time we see a feed, everything in it is old news: don't announce 50 items.
         let new = firstLook ? [] : fresh.map { FeedEntry(sourceId: id, sourceName: source.name, item: $0) }
         unread = (new + unread).sorted { ($0.item.date ?? .distantPast) > ($1.item.date ?? .distantPast) }
-        onUpdate?(new)
+        // Quiet when nothing changed, so a check doesn't redraw the bar under your finger.
+        if !new.isEmpty || before.0 != items[id] || before.1 != nil { onUpdate?(new) }
+        return new.isEmpty ? .upToDate : .new(new.count)
+    }
+
+    @discardableResult
+    private func fail(_ id: String, _ message: String) -> CheckResult {
+        if errors[id] != message {
+            errors[id] = message
+            onUpdate?([])
+        }
+        return .failed(message)
     }
 }

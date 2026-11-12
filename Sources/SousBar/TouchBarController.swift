@@ -361,7 +361,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate, BarHost {
     /// a spacer or a caption). With none, only the hide button goes right.
     static func splitIndex(_ views: [NSView]) -> Int {
         let stretchy = views.lastIndex { v in
-            v is PagedTextView || v is SpeedReaderView || v is NSTextField || type(of: v) == NSView.self
+            v is PagedTextView || v is SpeedReaderView || v is ScrollingTextView || v is NSTextField || type(of: v) == NSView.self
         }
         return stretchy.map { $0 + 1 } ?? max(0, views.count - 1)
     }
@@ -564,6 +564,13 @@ final class TouchBarController: NSObject, NSTouchBarDelegate, BarHost {
                 let action = b.onComplete
                 b.onComplete = { [weak self] in
                     self?.isPeeking = false
+                    action?()
+                }
+            }
+            for case let t as ScrollingTextView in views {
+                let action = t.onInteract
+                t.onInteract = { [weak self] in
+                    self?.isPeeking = false // reading it: stay open
                     action?()
                 }
             }

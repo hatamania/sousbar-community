@@ -159,7 +159,7 @@ To add an app (an RSS feed, a build status…), write a class that conforms to `
 
 ## Feeds (GitHub, Jira, any RSS or Atom)
 
-**Feeds** on the launcher shows new items from your feeds, one at a time: ‹ › to step through, ↗ to open the link, ✓ to mark all read. A new item pops up on the Touch Bar for 8 seconds, then hands it back, unless you touch it. It never covers an approval or dictation.
+**Feeds** on the launcher shows new items from your feeds, one at a time. **Swipe the text** to read the whole item (title, then its full content) in one continuous line: it follows your finger and glides when you flick, with a thin bar underneath showing how far along you are. ‹ › step between items, ↗ opens the link, ✓ marks all read. **Hold the feed's name** to check it now: it shows Checking…, then Up to date, 2 new, or what went wrong. A new item pops up on the Touch Bar for 8 seconds, then hands it back, unless you touch it. It never covers an approval or dictation.
 
 Add one from the menu bar chef hat › **Feeds › Add Feed…**:
 

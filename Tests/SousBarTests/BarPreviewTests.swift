@@ -269,12 +269,18 @@ final class BarPreviewTests: XCTestCase {
         let ok = HTTPURLResponse(url: URL(string: "https://x")!, statusCode: 200, httpVersion: nil, headerFields: [:])
         feeds.received(id, FeedStoreTests.rss(["a"]), ok, nil)
         let long = "<rss><channel><item><guid>b</guid><title>Ann Lee changed the status to Done on SB-12 - Touch Bar launcher with modules for feeds and more and even more words</title>" +
-            "<link>https://x/b</link><pubDate>\(Date().addingTimeInterval(-300).rfc822)</pubDate></item></channel></rss>"
+            "<link>https://x/b</link><description>&lt;p&gt;Ann: Shipped in 0.2.0 after review.&lt;/p&gt;&lt;p&gt;The launcher now holds Claude and Feeds, and you can swipe through a whole item.&lt;/p&gt;</description><pubDate>\(Date().addingTimeInterval(-300).rfc822)</pubDate></item></channel></rss>"
         bar.systemPresent = { _, _ in }
         Settings.feedPeek = false
         feeds.received(id, Data(long.utf8), ok, nil)
         bar.mode = .module("feeds")
         XCTAssertEqual(render("9-feeds"), [])
+        // Scrolled partway in: the view reports where it settled and the redraw keeps it.
+        let strip = try? XCTUnwrap(bar.itemViews.compactMap { $0 as? ScrollingTextView }.first)
+        XCTAssertGreaterThan(strip?.maxOffset ?? 0, 0, "the content is longer than the bar")
+        strip?.onScroll?(400)
+        XCTAssertEqual(render("9-feeds-scrolled"), [])
+        XCTAssertEqual(bar.itemViews.compactMap { $0 as? ScrollingTextView }.first?.offset, 400)
         bar.mode = .launcher
         XCTAssertEqual(render("9-launcher"), [])
         Settings.feedPeek = true
